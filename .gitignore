@@ -208,3 +208,6 @@ __marimo__/
 
 # temporary files folder
 temp/
+
+# local data folder
+data/
