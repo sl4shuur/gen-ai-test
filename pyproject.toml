@@ -1,9 +1,11 @@
 [project]
-name = "Project Name"
-version = "0.1.0"
+name = "GenAI-Test"
+version = "0.1.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.14.2",
     "colorama>=0.4.6",
+    "playwright>=1.55.0",
 ]
