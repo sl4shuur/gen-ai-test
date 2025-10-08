@@ -4,7 +4,6 @@ from pathlib import Path
 from playwright.async_api import async_playwright, BrowserContext, Page
 from bs4 import BeautifulSoup
 from datetime import datetime
-from typing import List, Optional
 import aiofiles
 import aiohttp
 
@@ -30,7 +29,8 @@ class BatchScraper:
         images_dir: Path = DATA_DIR / "images"
     ):
         self.logger = logger
-        self.link_collector = LinkCollector(logger=logger, cache_file=cache_file)
+        self.link_collector = LinkCollector(
+            logger=logger, cache_file=cache_file)
         self.output_dir = output_dir
         self.images_dir = images_dir
 
@@ -38,7 +38,7 @@ class BatchScraper:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.images_dir.mkdir(parents=True, exist_ok=True)
 
-        self.articles: List[Article] = []
+        self.articles: list[Article] = []
 
     async def scrape_articles(
         self,
@@ -47,7 +47,7 @@ class BatchScraper:
         scrape_new_only: bool = False,
         explore_catalogs: bool = True,
         download_images: bool = True
-    ) -> List[Article]:
+    ) -> list[Article]:
         """Scrape articles from The Batch"""
         self.logger.info(f"Starting to scrape up to {max_articles} articles")
 
@@ -62,11 +62,14 @@ class BatchScraper:
             self.link_collector.update_cache(save_to_cache=True)
 
             if scrape_new_only:
-                links_to_scrape = self.link_collector.get_links_list(new_only=True)[:max_articles]
+                links_to_scrape = self.link_collector.get_links_list(new_only=True)[
+                    :max_articles]
             else:
-                links_to_scrape = self.link_collector.get_links_list(new_only=False)[:max_articles]
+                links_to_scrape = self.link_collector.get_links_list(new_only=False)[
+                    :max_articles]
         else:
-            links_to_scrape = self.link_collector.get_links_list(new_only=scrape_new_only)[:max_articles]
+            links_to_scrape = self.link_collector.get_links_list(
+                new_only=scrape_new_only)[:max_articles]
 
         if not links_to_scrape:
             self.logger.warning("No articles to scrape")
@@ -95,10 +98,12 @@ class BatchScraper:
                     articles = await asyncio.gather(*tasks, return_exceptions=True)
 
                     # Filter out errors and None values
-                    valid_articles = [a for a in articles if isinstance(a, Article)]
+                    valid_articles = [
+                        a for a in articles if isinstance(a, Article)]
                     self.articles.extend(valid_articles)
 
-                    self.logger.info(f"Progress: {len(self.articles)}/{len(links_to_scrape)} articles")
+                    self.logger.info(
+                        f"Progress: {len(self.articles)}/{len(links_to_scrape)} articles")
 
             except Exception as e:
                 self.logger.error(f"Error during scraping: {e}", exc_info=True)
@@ -118,7 +123,7 @@ class BatchScraper:
         context: BrowserContext,
         url: str,
         download_images: bool = True
-    ) -> Optional[Article]:
+    ) -> Article | None:
         """Scrape individual article content"""
         page = await context.new_page()
 
@@ -139,7 +144,7 @@ class BatchScraper:
             title = self._extract_title(soup)
             article_content = self._extract_content(soup)
             images, image_descriptions = self._extract_images(soup)
-            published_date = self._extract_date(soup)
+            published_date_str = self._extract_date(soup)  # Now returns string
             author = self._extract_author(soup)
 
             # Download images if enabled
@@ -150,7 +155,7 @@ class BatchScraper:
                 url=url,
                 title=title,
                 content=article_content,
-                published_date=published_date,
+                published_date=published_date_str,
                 images=images,
                 image_descriptions=image_descriptions,
                 author=author
@@ -173,7 +178,7 @@ class BatchScraper:
     def _extract_title(self, soup: BeautifulSoup) -> str:
         """Extract article title"""
         # Try breadcrumb h1 first
-        breadcrumb_h1 = soup.find('nav', attrs={'aria-label': lambda x: x and 'breadcrumb' in x.lower()})
+        breadcrumb_h1 = soup.find('nav', attrs={'aria-label': 'breadcrumb'})
         if breadcrumb_h1:
             h1 = breadcrumb_h1.find('h1')
             if h1:
@@ -182,7 +187,8 @@ class BatchScraper:
         # Try meta og:title
         og_title = soup.find('meta', property='og:title')
         if og_title and og_title.get('content'):
-            return og_title['content'].strip()
+            content = str(og_title['content'])
+            return content.strip()
 
         # Try any h1
         h1 = soup.find('h1')
@@ -198,7 +204,9 @@ class BatchScraper:
 
         if not content_div:
             # Fallback: try other variants
-            content_div = soup.find('div', class_=lambda x: x and 'post_postContent' in str(x))
+            import re
+            content_div = soup.find(
+                'div', class_=re.compile(r'\bpost_postContent\b'))
 
         if not content_div:
             return ""
@@ -221,7 +229,7 @@ class BatchScraper:
 
         return "\n\n".join(paragraphs)
 
-    def _extract_images(self, soup: BeautifulSoup) -> tuple[List[str], List[str]]:
+    def _extract_images(self, soup: BeautifulSoup) -> tuple[list[str], list[str]]:
         """Extract images and their descriptions"""
         images = []
         image_descriptions = []
@@ -234,7 +242,8 @@ class BatchScraper:
 
             # Try to find description from og:description
             og_desc = soup.find('meta', property='og:description')
-            desc = og_desc['content'] if og_desc and og_desc.get('content') else ""
+            desc = og_desc['content'] if og_desc and og_desc.get(
+                'content') else ""
             image_descriptions.append(desc)
 
         # 2. Images inside article
@@ -245,7 +254,7 @@ class BatchScraper:
 
                 if not src:
                     continue
-
+                src = str(src)
                 # Skip icons, logos, avatars, emojis
                 if any(x in src.lower() for x in ['icon', 'logo', 'avatar', 'emoji']):
                     continue
@@ -263,16 +272,18 @@ class BatchScraper:
 
         return images, image_descriptions
 
-    async def _download_images(self, image_urls: List[str], article_url: str):
+    async def _download_images(self, image_urls: list[str], article_url: str):
         """Download images for an article"""
-        article_id = article_url.split('/')[-2] if article_url.endswith('/') else article_url.split('/')[-1]
+        article_id = article_url.split(
+            '/')[-2] if article_url.endswith('/') else article_url.split('/')[-1]
         article_images_dir = self.images_dir / article_id
         article_images_dir.mkdir(parents=True, exist_ok=True)
 
         async with aiohttp.ClientSession() as session:
             for idx, img_url in enumerate(image_urls):
                 try:
-                    async with session.get(img_url, timeout=30) as response:
+                    timeout = aiohttp.ClientTimeout(total=30)
+                    async with session.get(img_url, timeout=timeout) as response:
                         if response.status == 200:
                             # Get file extension from URL
                             ext = Path(img_url.split('?')[0]).suffix or '.jpg'
@@ -285,51 +296,67 @@ class BatchScraper:
 
                 except Exception as e:
                     # Silent fail for image downloads - not critical
+                    self.logger.warning(
+                        f"Failed to download image {img_url}: {e}")
                     pass
 
-    def _extract_date(self, soup: BeautifulSoup) -> datetime:
-        """Extract publication date from article"""
+    def _extract_date(self, soup: BeautifulSoup) -> str:
+        """Extract publication date from article and return in dd.mm.yyyy HH:MM:SS format"""
+        date_obj = None
+
         # Try meta article:published_time
         pub_time = soup.find('meta', property='article:published_time')
         if pub_time and pub_time.get('content'):
             try:
-                return datetime.fromisoformat(pub_time['content'].replace('Z', '+00:00'))
+                date_obj = datetime.fromisoformat(
+                    str(pub_time['content']).replace('Z', '+00:00'))
             except:
                 pass
 
         # Try time tag
-        time_tag = soup.find('time')
-        if time_tag:
-            datetime_attr = time_tag.get('datetime')
-            if datetime_attr:
+        if not date_obj:
+            time_tag = soup.find('time')
+            if time_tag:
+                datetime_attr = time_tag.get('datetime')
+                if datetime_attr:
+                    try:
+                        date_obj = datetime.fromisoformat(
+                            str(datetime_attr).replace('Z', '+00:00'))
+                    except:
+                        pass
+
+        # Try to extract from tag link like /tag/feb-26-2025/
+        if not date_obj:
+            date_link = soup.find('a', href=lambda x: bool(
+                x and '/tag/' in x and '-202' in x))
+            if date_link:
                 try:
-                    return datetime.fromisoformat(datetime_attr.replace('Z', '+00:00'))
+                    # Extract date from slug like "feb-26-2025"
+                    date_text = str(date_link.get('href', '')).split(
+                        '/tag/')[-1].strip('/')
+                    # Parse "feb-26-2025" format (without time, so set to midnight)
+                    date_obj = datetime.strptime(date_text, "%b-%d-%Y")
                 except:
                     pass
 
-        # Try to extract from tag link like /tag/feb-26-2025/
-        date_link = soup.find('a', href=lambda x: x and '/tag/' in x and '-202' in x)
-        if date_link:
-            try:
-                # Extract date from slug like "feb-26-2025"
-                date_text = date_link.get('href', '').split('/tag/')[-1].strip('/')
-                # Parse "feb-26-2025" format
-                date_obj = datetime.strptime(date_text, "%b-%d-%Y")
-                return date_obj
-            except:
-                pass
+        # If no date found, use current time
+        if not date_obj:
+            date_obj = datetime.now()
 
-        return datetime.now()
+        # Format as dd.mm.yyyy HH:MM:SS
+        return date_obj.strftime("%d.%m.%Y %H:%M:%S")
 
     def _extract_author(self, soup: BeautifulSoup) -> str:
         """Extract article author"""
         # Try meta twitter:data1
         twitter_author = soup.find('meta', property='twitter:data1')
         if twitter_author and twitter_author.get('content'):
-            return twitter_author['content']
+            return str(twitter_author['content'])
 
         # Try author tag
-        author_tag = soup.find(['span', 'div', 'a'], class_=lambda x: x and 'author' in str(x).lower())
+        import re
+        author_tag = soup.find(['span', 'div', 'a'],
+                               class_=re.compile(r'author', re.IGNORECASE))
         if author_tag:
             return author_tag.text.strip()
 

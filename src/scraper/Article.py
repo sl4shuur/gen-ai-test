@@ -11,7 +11,7 @@ class Article:
     # Basic metadata
     url: str
     title: str
-    published_date: datetime
+    published_date: str
     author: str = "Unknown"
     
     # Content
@@ -26,24 +26,15 @@ class Article:
     embeddings: list[float] | None = None
     
     # Timestamps
-    scraped_at: datetime = field(default_factory=datetime.now)
+    scraped_at: str = field(default_factory=lambda: datetime.now().strftime("%d.%m.%Y %H:%M:%S"))
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
-        data = asdict(self)
-        # Convert datetime objects to ISO format strings
-        data['published_date'] = self.published_date.isoformat()
-        data['scraped_at'] = self.scraped_at.isoformat()
-        return data
+        return asdict(self)
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Article':
         """Create Article from dictionary"""
-        # Convert ISO strings back to datetime
-        if isinstance(data.get('published_date'), str):
-            data['published_date'] = datetime.fromisoformat(data['published_date'])
-        if isinstance(data.get('scraped_at'), str):
-            data['scraped_at'] = datetime.fromisoformat(data['scraped_at'])
         return cls(**data)
     
     def save_to_json(self, output_dir: Path) -> Path:
