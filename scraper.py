@@ -1,6 +1,5 @@
 import asyncio
 import argparse
-from math import inf
 from typing import cast
 from pathlib import Path
 
@@ -117,7 +116,7 @@ async def main():
     logger.info(f"📚 Total articles scraped: {len(articles)}")
 
     logger.info(f"📂 Output directory: {args.output_dir}")
-    logger.info(f"🖼️ Images directory: {args.images_dir}")
+    logger.info(f"🖼️  Images directory: {args.images_dir}")
 
 
 if __name__ == "__main__":

@@ -104,8 +104,7 @@ class BatchScraper:
                         a for a in articles if isinstance(a, Article)]
                     self.articles.extend(valid_articles)
 
-                    self.logger.info(
-                        f"Progress: {len(self.articles)}/{len(links_to_scrape)} articles")
+                    self.logger.info(f"Progress: {len(self.articles)}/{len(links_to_scrape)} articles")
 
             except Exception as e:
                 self.logger.error(f"Error during scraping: {e}", exc_info=True)
@@ -116,7 +115,7 @@ class BatchScraper:
         # Step 3: Save articles to JSON
         await self._save_articles()
 
-        self.logger.info(f"Completed: {len(self.articles)} articles scraped")
+        self.logger.success(f"Completed: {len(self.articles)} articles scraped")
 
         return self.articles
 
@@ -279,26 +278,43 @@ class BatchScraper:
         article_images_dir = self.images_dir / article_id
         article_images_dir.mkdir(parents=True, exist_ok=True)
 
-        async with aiohttp.ClientSession() as session:
+        # Configure session with better error handling
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        connector = aiohttp.TCPConnector(limit=10, force_close=True)
+        
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             for idx, img_url in enumerate(image_urls):
                 try:
-                    timeout = aiohttp.ClientTimeout(total=30)
-                    async with session.get(img_url, timeout=timeout) as response:
+                    # Get file extension from URL
+                    default_ext = '.png'
+                    ext = Path(img_url.split('?')[0]).suffix or default_ext
+                    filename = f"image_{idx}{ext}"
+                    filepath = article_images_dir / filename
+
+                    # Skip if already downloaded
+                    if filepath.exists():
+                        continue
+
+                    # Download with custom headers
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                        'Referer': 'https://www.deeplearning.ai/'
+                    }
+
+                    async with session.get(img_url, headers=headers, allow_redirects=True) as response:
                         if response.status == 200:
-                            # Get file extension from URL
-                            ext = Path(img_url.split('?')[0]).suffix or '.jpg'
-                            filename = f"image_{idx}{ext}"
-                            filepath = article_images_dir / filename
+                            # Read content in chunks to handle incomplete downloads
+                            content = bytearray()
+                            async for chunk in response.content.iter_chunked(8192):
+                                content.extend(chunk)
 
-                            # Save image
-                            async with aiofiles.open(filepath, 'wb') as f:
-                                await f.write(await response.read())
-
+                            # Save image only if we got some data
+                            if len(content) > 0:
+                                async with aiofiles.open(filepath, 'wb') as f:
+                                    await f.write(content)
                 except Exception as e:
-                    # Silent fail for image downloads - not critical
-                    self.logger.warning(
-                        f"Failed to download image {img_url}: {e}")
-                    pass
+                    self.logger.warning(f"Failed to download image {img_url}: {e}")
 
     def _extract_date(self, soup: BeautifulSoup) -> str:
         """Extract publication date from article and return in dd.mm.yyyy HH:MM:SS format"""
@@ -360,6 +376,7 @@ class BatchScraper:
         if author_tag:
             return author_tag.text.strip()
 
+        # Fallback to default author
         return "DeepLearning.AI"
 
     async def _save_articles(self):
