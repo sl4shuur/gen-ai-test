@@ -1,7 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
-from playwright.async_api import async_playwright, BrowserContext, Page
+from playwright.async_api import async_playwright, BrowserContext
 from bs4 import BeautifulSoup
 from datetime import datetime
 import aiofiles
@@ -13,7 +13,7 @@ from src.utils.logging_config import CustomLogger
 from src.utils.config import DATA_DIR
 
 # Configuration constants
-DEFAULT_DELAY_SECONDS = 0.3
+DEFAULT_DELAY_SECONDS = 0.7
 DEFAULT_TIMEOUT_MS = 60000
 BATCH_SIZE = 3
 
@@ -49,7 +49,7 @@ class BatchScraper:
         download_images: bool = True
     ) -> list[Article]:
         """Scrape articles from The Batch"""
-        self.logger.info(f"Starting to scrape up to {max_articles} articles")
+        is_no_limit = max_articles == -1
 
         # Step 1: Collect links if needed
         links_to_scrape = []
@@ -61,15 +61,17 @@ class BatchScraper:
 
             self.link_collector.update_cache(save_to_cache=True)
 
+            if is_no_limit:
+                max_articles = stats['cached_links']
+
             if scrape_new_only:
-                links_to_scrape = self.link_collector.get_links_list(new_only=True)[
-                    :max_articles]
+                links_to_scrape = self.link_collector.get_links_list(new_only=True)[:max_articles]
             else:
-                links_to_scrape = self.link_collector.get_links_list(new_only=False)[
-                    :max_articles]
+                links_to_scrape = self.link_collector.get_links_list(new_only=False)[:max_articles]
         else:
-            links_to_scrape = self.link_collector.get_links_list(
-                new_only=scrape_new_only)[:max_articles]
+            if is_no_limit:
+                max_articles = self.link_collector.get_stats()['cached_links']
+            links_to_scrape = self.link_collector.get_links_list(new_only=scrape_new_only)[:max_articles]
 
         if not links_to_scrape:
             self.logger.warning("No articles to scrape")
@@ -162,9 +164,7 @@ class BatchScraper:
             )
 
             # Success log
-            self.logger.success(
-                f"Scraped: '{title}' | {len(article_content)} chars, {len(images)} images"
-            )
+            self.logger.success(f"Scraped {url}")
 
             return article
 
