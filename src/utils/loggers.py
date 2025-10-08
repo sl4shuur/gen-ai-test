@@ -10,4 +10,6 @@ class CustomLogger(logging.Logger):
     def success(self, message: str, *args, **kwargs):
         """Log a message with SUCCESS level"""
         if self.isEnabledFor(SUCCESS_LEVEL):
-            self._log(SUCCESS_LEVEL, message, args, **kwargs)
+            # Add stacklevel to get correct file/function info
+            # stacklevel=2 means: skip this function and go to the caller
+            self._log(SUCCESS_LEVEL, message, args, **kwargs, stacklevel=2)
