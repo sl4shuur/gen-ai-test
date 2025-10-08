@@ -6,9 +6,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 import re
 
-from src.utils.logging_config import setup_logging
-
-logger = setup_logging(full_color=True, include_function=True)
+from src.utils.logging_config import setup_logging, CustomLogger
 
 
 class LinkCollector:
@@ -16,9 +14,11 @@ class LinkCollector:
 
     def __init__(
         self,
+        logger: CustomLogger,
         base_url: str = "https://www.deeplearning.ai/the-batch/",
-        cache_file: str = "data/cache/article_links.json"
+        cache_file: str = "data/cache/article_links.json",
     ):
+        self.logger = logger
         self.base_url = base_url
         self.cache_file = Path(cache_file)
 
@@ -27,7 +27,8 @@ class LinkCollector:
 
         # Load cached links
         self.cached_links = self._load_cached_links()
-        logger.info(f"Loaded {len(self.cached_links)} cached article links")
+        self.logger.info(
+            f"Loaded {len(self.cached_links)} cached article links")
 
         # Track visited pages to avoid duplicates
         self.visited_pages: set[str] = set()
@@ -42,16 +43,19 @@ class LinkCollector:
                     data = json.load(f)
                     return set(data.get('links', []))
             except Exception as e:
-                logger.error(f"Error loading cache: {e}")
+                self.logger.error(f"Error loading cache: {e}")
                 return set()
         return set()
 
     def _save_links_to_cache(self, links: set[str]) -> None:
         """Save article links to cache file"""
         try:
+            # Format: 08.10.2025 15:32:18
+            formatted_time = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+
             cache_data = {
                 'links': sorted(list(links)),
-                'last_updated': datetime.now().isoformat(),
+                'last_updated': formatted_time,
                 'total_count': len(links),
                 'collection_stats': {
                     'visited_pages': len(self.visited_pages),
@@ -62,9 +66,9 @@ class LinkCollector:
             with open(self.cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"Saved {len(links)} links to cache")
+            self.logger.info(f"Saved {len(links)} links to cache")
         except Exception as e:
-            logger.error(f"Error saving cache: {e}")
+            self.logger.error(f"Error saving cache: {e}")
 
     def _is_valid_article_link(self, url: str) -> bool:
         """
@@ -150,20 +154,21 @@ class LinkCollector:
         """
         return '/tag/' in url and '/page/' not in url
 
-    def _is_pagination_link(self, url: str) -> bool:
+    def _is_main_pagination_link(self, url: str) -> bool:
         """
-        Check if URL is a pagination link
+        Check if URL is main page pagination (not catalog pagination)
 
-        Pagination patterns:
-        ✅ https://www.deeplearning.ai/the-batch/tag/letters/page/2/
+        Main pagination patterns:
         ✅ https://www.deeplearning.ai/the-batch/page/2/
+        ✅ https://www.deeplearning.ai/the-batch/page/3/
         """
-        return '/page/' in url
+        return url.startswith(self.base_url.rstrip('/') + '/page/')
 
     async def collect_all_links(
         self,
         explore_catalogs: bool = True,
-        max_pages_per_catalog: int = 50
+        max_pages_per_catalog: int = 50,
+        max_main_pages: int = 100
     ) -> set[str]:
         """
         Collect all article links from The Batch
@@ -171,11 +176,12 @@ class LinkCollector:
         Args:
             explore_catalogs: Whether to explore catalog/tag pages
             max_pages_per_catalog: Maximum pages to explore per catalog
+            max_main_pages: Maximum main pagination pages to explore
 
         Returns:
             set of article URLs
         """
-        logger.info("Starting link collection from The Batch")
+        self.logger.info("Starting link collection from The Batch")
 
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -191,36 +197,103 @@ class LinkCollector:
             page = await context.new_page()
 
             try:
-                # Step 1: Explore main page
-                await self._explore_main_page(page)
+                # Step 1: Explore main page and its pagination
+                await self._explore_main_pages_with_pagination(page, max_main_pages)
 
                 # Step 2: Explore catalog pages if enabled
                 if explore_catalogs:
                     await self._explore_all_catalogs(page, max_pages_per_catalog)
 
-                logger.info(f"Collection completed: {len(self.found_article_links)} article links")
+                self.logger.info(
+                    f"Collection completed: {len(self.found_article_links)} article links")
 
             except Exception as e:
-                logger.error(f"Error during link collection: {e}", exc_info=True)
+                self.logger.error(
+                    f"Error during link collection: {e}", exc_info=True)
             finally:
                 await context.close()
                 await browser.close()
 
         return self.found_article_links
 
-    async def _explore_main_page(self, page: Page) -> None:
-        """Explore the main page for initial links"""
-        logger.info("Exploring main page...")
+    async def _explore_main_pages_with_pagination(self, page: Page, max_pages: int) -> None:
+        """
+        Explore main page and all its pagination pages
 
-        await page.goto(self.base_url, wait_until="networkidle", timeout=30000)
-        await page.wait_for_selector('a[href*="/the-batch/"]', timeout=10000)
+        This explores:
+        - https://www.deeplearning.ai/the-batch/
+        - https://www.deeplearning.ai/the-batch/page/2/
+        - https://www.deeplearning.ai/the-batch/page/3/
+        - etc.
+        """
+        self.logger.info(
+            f"Exploring main page and pagination (up to {max_pages} pages)...")
 
-        links = await self._extract_links_from_page(page)
-        self._categorize_links(links, "main page")
+        current_page = 1
+        consecutive_empty_pages = 0
+
+        while current_page <= max_pages:
+            # Build page URL
+            if current_page == 1:
+                page_url = self.base_url
+            else:
+                page_url = f"{self.base_url.rstrip('/')}/page/{current_page}/"
+
+            # Skip if already visited
+            if page_url in self.visited_pages:
+                break
+
+            try:
+                self.logger.debug(
+                    f"Loading main page {current_page}: {page_url}")
+                await page.goto(page_url, wait_until="networkidle", timeout=30000)
+
+                # Check if page exists (not 404)
+                if await page.locator('text=404').count() > 0:
+                    self.logger.debug(
+                        f"Main page {current_page} not found, stopping pagination")
+                    break
+
+                await page.wait_for_selector('a[href*="/the-batch/"]', timeout=10000)
+
+                # Extract links from this page
+                before_count = len(self.found_article_links)
+                links = await self._extract_links_from_page(page)
+                self._categorize_links(links, f"main page {current_page}")
+                after_count = len(self.found_article_links)
+
+                articles_found = after_count - before_count
+
+                if articles_found == 0:
+                    consecutive_empty_pages += 1
+                    if consecutive_empty_pages >= 3:
+                        self.logger.debug(
+                            f"No articles found in {consecutive_empty_pages} consecutive main pages, stopping")
+                        break
+                else:
+                    consecutive_empty_pages = 0
+                    self.logger.info(
+                        f"Main page {current_page}: found {articles_found} new articles")
+
+                self.visited_pages.add(page_url)
+                current_page += 1
+
+                # Be respectful to the server
+                await asyncio.sleep(0.5)
+
+            except Exception as e:
+                self.logger.warning(
+                    f"Error exploring main page {page_url}: {e}")
+                break
 
     async def _explore_all_catalogs(self, page: Page, max_pages: int) -> None:
         """Explore all catalog pages and their pagination"""
-        logger.info(f"Exploring {len(self.found_catalog_links)} catalog pages...")
+        if not self.found_catalog_links:
+            self.logger.info("No catalog links found to explore")
+            return
+
+        self.logger.info(
+            f"Exploring {len(self.found_catalog_links)} catalog pages...")
 
         for catalog_url in list(self.found_catalog_links):
             await self._explore_catalog_with_pagination(page, catalog_url, max_pages)
@@ -232,7 +305,7 @@ class LinkCollector:
             max_pages: int
     ) -> None:
         """Explore catalog and its pagination pages"""
-        logger.info(f"Exploring catalog: {catalog_url}")
+        self.logger.info(f"Exploring catalog: {catalog_url}")
 
         current_page = 1
         consecutive_empty_pages = 0
@@ -250,14 +323,14 @@ class LinkCollector:
                 break
 
             try:
-                logger.debug(
+                self.logger.debug(
                     f"Loading catalog page {current_page}: {page_url}")
                 await page.goto(page_url, wait_until="networkidle", timeout=30000)
 
                 # Check if page exists (not 404)
                 if await page.locator('text=404').count() > 0:
-                    logger.debug(
-                        f"Page {current_page} not found, stopping pagination")
+                    self.logger.debug(
+                        f"Catalog page {current_page} not found, stopping pagination")
                     break
 
                 await page.wait_for_selector('a[href*="/the-batch/"]', timeout=10000)
@@ -273,12 +346,12 @@ class LinkCollector:
                 if articles_found == 0:
                     consecutive_empty_pages += 1
                     if consecutive_empty_pages >= 3:
-                        logger.debug(
-                            f"No articles found in {consecutive_empty_pages} consecutive pages, stopping")
+                        self.logger.debug(
+                            f"No articles found in {consecutive_empty_pages} consecutive catalog pages, stopping")
                         break
                 else:
                     consecutive_empty_pages = 0
-                    logger.info(
+                    self.logger.info(
                         f"Catalog page {current_page}: found {articles_found} new articles")
 
                 self.visited_pages.add(page_url)
@@ -288,7 +361,8 @@ class LinkCollector:
                 await asyncio.sleep(0.5)
 
             except Exception as e:
-                logger.warning(f"Error exploring catalog page {page_url}: {e}")
+                self.logger.warning(
+                    f"Error exploring catalog page {page_url}: {e}")
                 break
 
     async def _extract_links_from_page(self, page: Page) -> set[str]:
@@ -299,7 +373,7 @@ class LinkCollector:
         links: set[str] = set()
 
         for link in soup.find_all('a', href=True):
-            href = link['href']
+            href = str(link['href'])
 
             # Make absolute URL if needed
             if href.startswith('/'):
@@ -323,15 +397,15 @@ class LinkCollector:
                 if link not in self.found_article_links:
                     self.found_article_links.add(link)
                     articles_found += 1
-                    logger.debug(f"New article: {link}")
+                    self.logger.debug(f"New article: {link}")
             elif self._is_catalog_link(link):
                 if link not in self.found_catalog_links:
                     self.found_catalog_links.add(link)
                     catalogs_found += 1
-                    logger.debug(f"New catalog: {link}")
+                    self.logger.debug(f"New catalog: {link}")
 
         if articles_found > 0 or catalogs_found > 0:
-            logger.info(
+            self.logger.info(
                 f"{source}: +{articles_found} articles, +{catalogs_found} catalogs")
 
     def get_new_links(self) -> set[str]:
